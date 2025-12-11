@@ -5,32 +5,46 @@ const fs = require('fs');
 const path = require('path');
 
 const app = express();
-
-// 👇 backend port (inside Docker or bare metal)
 const PORT = 9001;
 
 // allow frontend to call this API
 app.use(cors({ origin: '*' }));
 
-// Root upload directory
+// Root upload directory (level 0)
 const ROOT_UPLOAD_DIR = path.join(__dirname, 'uploads');
 
 if (!fs.existsSync(ROOT_UPLOAD_DIR)) {
   fs.mkdirSync(ROOT_UPLOAD_DIR, { recursive: true });
 }
 
+// helper: sanitize folder name
+function sanitizeName(name, fallback) {
+  const raw = (name || '').toString().trim();
+  const used = raw || fallback;
+  const safe = used.replace(/[^a-zA-Z0-9_\-]/g, '_');
+  return { raw: used, safe };
+}
+
 // ========= Multer storage =========
 const storage = multer.diskStorage({
   destination: (req, file, cb) => {
-    const rawFolderName = req.body.folderName || 'default';
-    const safeFolderName = rawFolderName.replace(/[^a-zA-Z0-9_\-]/g, '_');
-    const uploadPath = path.join(ROOT_UPLOAD_DIR, safeFolderName);
+    const company = sanitizeName(req.body.companyName, 'company_default'); // lv1
+    const project = sanitizeName(req.body.projectName, 'project_default'); // lv2
+    const title = sanitizeName(req.body.titleName, 'title_default');       // lv3
 
-    // Store folder info on the request so we can use it in the route
+    const uploadPath = path.join(
+      ROOT_UPLOAD_DIR,
+      company.safe,
+      project.safe,
+      title.safe
+    );
+
+    // store info for later use in route
     if (!req._uploadInfo) {
       req._uploadInfo = {
-        rawFolderName,
-        safeFolderName,
+        company,
+        project,
+        title,
         uploadPath,
       };
     }
@@ -46,10 +60,10 @@ const storage = multer.diskStorage({
 
 const upload = multer({
   storage,
-  // limits: { fileSize: 5 * 1024 * 1024 * 1024 } // example: 5GB
+  // limits: { fileSize: 5 * 1024 * 1024 * 1024 } // example 5GB
 });
 
-// serve uploads as static files (optional, but useful)
+// serve uploads as static files (optional but useful)
 app.use('/uploads', express.static(ROOT_UPLOAD_DIR));
 
 // health check
@@ -66,24 +80,37 @@ app.post('/upload', upload.array('files', 100), (req, res) => {
     });
   }
 
-  const info = req._uploadInfo || {};
-  const rawFolderName = info.rawFolderName || (req.body.folderName || 'default');
-  const safeFolderName = info.safeFolderName || rawFolderName.replace(/[^a-zA-Z0-9_\-]/g, '_');
-  const uploadPath = info.uploadPath || path.join(ROOT_UPLOAD_DIR, safeFolderName);
+  const info = req._uploadInfo;
+  const company = info?.company || sanitizeName(req.body.companyName, 'company_default');
+  const project = info?.project || sanitizeName(req.body.projectName, 'project_default');
+  const title = info?.title || sanitizeName(req.body.titleName, 'title_default');
+  const uploadPath =
+    info?.uploadPath ||
+    path.join(ROOT_UPLOAD_DIR, company.safe, project.safe, title.safe);
 
-  // this is the folder path ON THE SERVER
-  const absoluteFolderPath = uploadPath; // e.g. /app/uploads/scan_2025_10_27
+  // full path on server
+  const folderPath = uploadPath;
 
-  // optional: URL to access via HTTP (because we did app.use('/uploads', ...))
-  const folderUrl = `/uploads/${safeFolderName}`;
+  // URL prefix (HTTP access)
+  const folderUrl = `/uploads/${company.safe}/${project.safe}/${title.safe}`;
 
   res.json({
     success: true,
     message: 'Files uploaded successfully',
-    folderName: rawFolderName,
-    folderNameSafe: safeFolderName,
-    folderPath: absoluteFolderPath,   // 👈 full path on backend
-    folderUrl: folderUrl,            // 👈 relative URL (http://192.168.1.199:9001 + this)
+    company: {
+      raw: company.raw,
+      safe: company.safe,
+    },
+    project: {
+      raw: project.raw,
+      safe: project.safe,
+    },
+    title: {
+      raw: title.raw,
+      safe: title.safe,
+    },
+    folderPath,      // e.g. /app/uploads/system/project1/lcc-001
+    folderUrl,       // e.g. /uploads/system/project1/lcc-001
     count: req.files.length,
     files: req.files.map((f) => ({
       originalName: f.originalname,
