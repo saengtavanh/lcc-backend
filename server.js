@@ -1,4 +1,3 @@
-// server.js
 const express = require('express');
 const multer = require('multer');
 const cors = require('cors');
@@ -6,77 +5,94 @@ const fs = require('fs');
 const path = require('path');
 
 const app = express();
-const PORT = 9001; // API: http://192.168.1.199:3000
 
-// ===== CORS (allow your frontend app) =====
-app.use(cors({
-  origin: '*', // or set your frontend URL here
-}));
+// 👇 backend port (inside Docker or bare metal)
+const PORT = 9001;
 
-// Root upload path
+// allow frontend to call this API
+app.use(cors({ origin: '*' }));
+
+// Root upload directory
 const ROOT_UPLOAD_DIR = path.join(__dirname, 'uploads');
 
-// Ensure root folder exists
 if (!fs.existsSync(ROOT_UPLOAD_DIR)) {
   fs.mkdirSync(ROOT_UPLOAD_DIR, { recursive: true });
 }
 
-// ===== Multer storage (dynamic folder by folderName) =====
+// ========= Multer storage =========
 const storage = multer.diskStorage({
   destination: (req, file, cb) => {
-    const folderName = req.body.folderName || 'default';
-    const safeFolderName = folderName.replace(/[^a-zA-Z0-9_\-]/g, '_');
+    const rawFolderName = req.body.folderName || 'default';
+    const safeFolderName = rawFolderName.replace(/[^a-zA-Z0-9_\-]/g, '_');
     const uploadPath = path.join(ROOT_UPLOAD_DIR, safeFolderName);
+
+    // Store folder info on the request so we can use it in the route
+    if (!req._uploadInfo) {
+      req._uploadInfo = {
+        rawFolderName,
+        safeFolderName,
+        uploadPath,
+      };
+    }
 
     fs.mkdir(uploadPath, { recursive: true }, (err) => {
       cb(err, uploadPath);
     });
   },
   filename: (req, file, cb) => {
-    cb(null, file.originalname); // keep original file name
-  }
+    cb(null, file.originalname);
+  },
 });
 
-// Allow many files per request
 const upload = multer({
-  storage: storage,
-  // Optional limit example:
-  // limits: { fileSize: 5 * 1024 * 1024 * 1024 } // 5GB
+  storage,
+  // limits: { fileSize: 5 * 1024 * 1024 * 1024 } // example: 5GB
 });
 
-// ===== Routes =====
+// serve uploads as static files (optional, but useful)
+app.use('/uploads', express.static(ROOT_UPLOAD_DIR));
 
-// Health check
+// health check
 app.get('/health', (req, res) => {
   res.json({ status: 'ok' });
 });
 
-// Upload multiple files
-// field name must match frontend: "files"
+// ========= Upload route =========
 app.post('/upload', upload.array('files', 100), (req, res) => {
   if (!req.files || req.files.length === 0) {
     return res.status(400).json({
       success: false,
-      message: 'No files uploaded'
+      message: 'No files uploaded',
     });
   }
 
-  const folderName = req.body.folderName || 'default';
+  const info = req._uploadInfo || {};
+  const rawFolderName = info.rawFolderName || (req.body.folderName || 'default');
+  const safeFolderName = info.safeFolderName || rawFolderName.replace(/[^a-zA-Z0-9_\-]/g, '_');
+  const uploadPath = info.uploadPath || path.join(ROOT_UPLOAD_DIR, safeFolderName);
+
+  // this is the folder path ON THE SERVER
+  const absoluteFolderPath = uploadPath; // e.g. /app/uploads/scan_2025_10_27
+
+  // optional: URL to access via HTTP (because we did app.use('/uploads', ...))
+  const folderUrl = `/uploads/${safeFolderName}`;
 
   res.json({
     success: true,
     message: 'Files uploaded successfully',
-    folder: folderName,
+    folderName: rawFolderName,
+    folderNameSafe: safeFolderName,
+    folderPath: absoluteFolderPath,   // 👈 full path on backend
+    folderUrl: folderUrl,            // 👈 relative URL (http://192.168.1.199:9001 + this)
     count: req.files.length,
     files: req.files.map((f) => ({
       originalName: f.originalname,
       savedAs: f.filename,
-      path: f.path
-    }))
+      path: f.path,
+    })),
   });
 });
 
-// Start server
 app.listen(PORT, '0.0.0.0', () => {
   console.log(`File upload API running at http://192.168.1.199:${PORT}`);
 });
