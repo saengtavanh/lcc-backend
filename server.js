@@ -6,7 +6,7 @@ const fs = require('fs');
 const path = require('path');
 
 const app = express();
-const PORT = 9000; // API: http://192.168.1.199:3000
+const PORT = 9001; // API: http://192.168.1.199:3000
 
 // ===== CORS (allow your frontend app) =====
 app.use(cors({
